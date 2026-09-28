@@ -19,7 +19,7 @@ La même page permet de créer ou de supprimer uniquement `documents/install.loc
 
 ## Mise à jour du module via git
 
-Sur la même page admin : configurez une URL HTTPS (`https://github.com/org/dolibarrupdater.git`) et une branche (`main`, etc.), enregistrez, puis lancez **Mettre à jour le module**. Au premier passage le module est cloné ; ensuite un `fetch` + `reset --hard` est fait. Les modifications locales du module sont écrasées. Le binaire `git` doit être installé sur le serveur, et le compte du serveur web doit pouvoir écrire dans `custom/dolibarrupdater`.
+Sur la page de configuration du module (Accueil > Configuration > Modules, icône de config) : configurez une URL HTTPS (`https://github.com/org/dolibarrupdater.git`), enregistrez, choisissez une branche dans la liste, puis lancez **Mettre à jour le module**. La version installée du module est affichée et une alerte apparaît si une version plus récente est disponible sur la branche choisie. Au premier passage le module est cloné ; ensuite un `fetch` + `reset --hard` est fait. Les modifications locales du module sont écrasées. Le binaire `git` doit être installé sur le serveur, et le compte du serveur web doit pouvoir écrire dans `custom/dolibarrupdater`.
 
 ## Droits
 
@@ -27,4 +27,4 @@ Page réservée aux administrateurs. Le serveur web doit pouvoir écrire dans `h
 
 ## Activation
 
-Accueil > Configuration > Modules, famille Technique, module **Mise à jour Dolibarr**. Le menu est ensuite sous Accueil > Configuration.
+Accueil > Configuration > Modules, famille Technique, module **Mise à jour Dolibarr**. Ouvrez ensuite la page de configuration du module (icône engrenage) : il n'y a pas d'entrée dans le menu Accueil.

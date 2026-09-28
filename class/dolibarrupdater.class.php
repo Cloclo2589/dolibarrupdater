@@ -1666,9 +1666,116 @@ class DolibarrUpdater
 	}
 
 	/**
-	 * Status of the module git checkout (local only; no network).
+	 * Installed module version from the descriptor file.
 	 *
-	 * @return array{git:bool,repo:bool,remote:string,branch:string,commit:string,dirty:bool,can_update:bool,message:string}
+	 * @return string Empty when unreadable
+	 */
+	public function moduleVersion()
+	{
+		$file = $this->moduleDir().'/core/modules/modDolibarrupdater.class.php';
+		$content = @file_get_contents($file);
+		if ($content === false) {
+			return '';
+		}
+		return $this->parseModuleDescriptorVersion($content);
+	}
+
+	/**
+	 * Remote heads for an HTTPS git URL, preferred branches first.
+	 *
+	 * @param string $remote HTTPS remote URL
+	 * @return array<int,string>
+	 */
+	public function listRemoteBranches($remote)
+	{
+		global $langs;
+		$langs->load('dolibarrupdater@dolibarrupdater');
+
+		$remote = trim((string) $remote);
+		if ($this->gitBinary() === '') {
+			$this->error = $langs->trans('DolibarrUpdaterGitMissing');
+			return array();
+		}
+		if (!$this->isAllowedGitRemote($remote)) {
+			$this->error = $langs->trans('DolibarrUpdaterGitBadRemote');
+			return array();
+		}
+
+		$cache = $this->workDir().'/branches-'.md5($remote).'.cache.json';
+		if (is_file($cache) && (time() - filemtime($cache) < 600)) {
+			$cached = $this->readJsonFile($cache);
+			if (is_array($cached)) {
+				$out = array();
+				foreach ($cached as $name) {
+					if (is_string($name) && $this->isAllowedGitBranch($name)) {
+						$out[] = $name;
+					}
+				}
+				return $out;
+			}
+		}
+
+		$cwd = $this->gitListCwd();
+		$result = $this->runGit(array('ls-remote', '--heads', $remote), $cwd);
+		if ($result['code'] !== 0) {
+			$this->error = $langs->trans('DolibarrUpdaterGitBranchesFailed', $result['err'] !== '' ? $result['err'] : $result['out']);
+			return array();
+		}
+
+		$branches = array();
+		foreach (preg_split('/\R/', $result['out']) as $line) {
+			$line = trim($line);
+			if ($line === '' || !preg_match('#^[0-9a-fA-F]+\s+refs/heads/(.+)$#', $line, $m)) {
+				continue;
+			}
+			$name = $m[1];
+			if ($this->isAllowedGitBranch($name) && !in_array($name, $branches, true)) {
+				$branches[] = $name;
+			}
+		}
+		$branches = $this->sortBranchNames($branches);
+
+		if ($this->ensureDir($this->workDir())) {
+			$this->writeFile($cache, json_encode(array_values($branches)));
+		}
+		return $branches;
+	}
+
+	/**
+	 * Module version published on the configured remote branch.
+	 *
+	 * @param string $remote HTTPS remote URL
+	 * @param string $branch Branch name
+	 * @return string Empty when unavailable
+	 */
+	public function fetchRemoteModuleVersion($remote = '', $branch = '')
+	{
+		$remote = trim((string) ($remote !== '' ? $remote : getDolGlobalString('DOLIBARRUPDATER_GIT_REMOTE')));
+		$branch = trim((string) ($branch !== '' ? $branch : getDolGlobalString('DOLIBARRUPDATER_GIT_BRANCH', 'main')));
+		if (!$this->isAllowedGitRemote($remote) || !$this->isAllowedGitBranch($branch)) {
+			return '';
+		}
+
+		$cache = $this->workDir().'/module-version-'.md5($remote.'|'.$branch).'.cache.json';
+		if (is_file($cache) && (time() - filemtime($cache) < 600)) {
+			$cached = $this->readJsonFile($cache);
+			if (is_array($cached) && !empty($cached['version']) && is_string($cached['version'])) {
+				return $cached['version'];
+			}
+		}
+
+		$content = $this->fetchRemoteDescriptorContent($remote, $branch);
+		$version = $this->parseModuleDescriptorVersion($content);
+		if ($version !== '' && $this->ensureDir($this->workDir())) {
+			$this->writeFile($cache, json_encode(array('version' => $version)));
+		}
+		return $version;
+	}
+
+	/**
+	 * Status of the module git checkout, including version and remote update check.
+	 *
+	 * @return array{git:bool,repo:bool,remote:string,branch:string,commit:string,dirty:bool,can_update:bool,message:string,version:string,remote_version:string,update_available:bool,branches:array<int,string>}
 	 */
 	public function moduleGitStatus()
 	{
@@ -1684,6 +1791,10 @@ class DolibarrUpdater
 			'dirty' => false,
 			'can_update' => false,
 			'message' => '',
+			'version' => $this->moduleVersion(),
+			'remote_version' => '',
+			'update_available' => false,
+			'branches' => array(),
 		);
 
 		if (!$status['git']) {
@@ -1694,7 +1805,7 @@ class DolibarrUpdater
 			$status['message'] = $langs->trans('DolibarrUpdaterGitBadRemote');
 			return $status;
 		}
-		if (!$this->isAllowedGitBranch($status['branch'])) {
+		if ($status['branch'] !== '' && !$this->isAllowedGitBranch($status['branch'])) {
 			$status['message'] = $langs->trans('DolibarrUpdaterGitBadBranch');
 			return $status;
 		}
@@ -1703,21 +1814,46 @@ class DolibarrUpdater
 			return $status;
 		}
 
+		$previousError = $this->error;
+		$this->error = '';
+		$status['branches'] = $this->listRemoteBranches($status['remote']);
+		$branchError = $this->error;
+		$this->error = $previousError;
+
 		$status['can_update'] = true;
 		if (!$status['repo']) {
 			$status['message'] = $langs->trans('DolibarrUpdaterGitNotInitialized');
-			return $status;
+		} else {
+			$head = $this->runGit(array('rev-parse', '--short', 'HEAD'), $this->moduleDir());
+			if ($head['code'] === 0) {
+				$status['commit'] = trim($head['out']);
+			}
+			$porcelain = $this->runGit(array('status', '--porcelain'), $this->moduleDir());
+			if ($porcelain['code'] === 0 && trim($porcelain['out']) !== '') {
+				$status['dirty'] = true;
+			}
+			$status['message'] = $langs->trans('DolibarrUpdaterGitReady');
 		}
 
-		$head = $this->runGit(array('rev-parse', '--short', 'HEAD'), $this->moduleDir());
-		if ($head['code'] === 0) {
-			$status['commit'] = trim($head['out']);
+		if ($this->isAllowedGitBranch($status['branch'])) {
+			$status['remote_version'] = $this->fetchRemoteModuleVersion($status['remote'], $status['branch']);
+			if ($status['remote_version'] !== '' && $status['version'] !== '') {
+				require_once DOL_DOCUMENT_ROOT.'/core/lib/admin.lib.php';
+				$localParts = preg_split('/[\-\.]/', $status['version']);
+				$remoteParts = preg_split('/[\-\.]/', $status['remote_version']);
+				if (versioncompare($remoteParts, $localParts) > 0) {
+					$status['update_available'] = true;
+					$status['message'] = $langs->trans('DolibarrUpdaterModuleUpdateAvailable', $status['remote_version']);
+				} elseif (!$status['update_available'] && $status['repo']) {
+					$status['message'] = $langs->trans('DolibarrUpdaterModuleUpToDate');
+				}
+			} elseif ($branchError !== '' && empty($status['branches'])) {
+				$status['message'] = $branchError;
+			} elseif ($status['remote_version'] === '' && $status['repo']) {
+				$status['message'] = $langs->trans('DolibarrUpdaterModuleVersionCheckFailed');
+			}
 		}
-		$porcelain = $this->runGit(array('status', '--porcelain'), $this->moduleDir());
-		if ($porcelain['code'] === 0 && trim($porcelain['out']) !== '') {
-			$status['dirty'] = true;
-		}
-		$status['message'] = $langs->trans('DolibarrUpdaterGitReady');
+
 		return $status;
 	}
 
@@ -1736,16 +1872,37 @@ class DolibarrUpdater
 
 		$remote = trim((string) $remote);
 		$branch = trim((string) $branch);
-		if ($branch === '') {
-			$branch = 'main';
-		}
 		if ($remote !== '' && !$this->isAllowedGitRemote($remote)) {
 			$this->error = $langs->trans('DolibarrUpdaterGitBadRemote');
 			return -1;
 		}
-		if (!$this->isAllowedGitBranch($branch)) {
-			$this->error = $langs->trans('DolibarrUpdaterGitBadBranch');
-			return -1;
+
+		if ($remote === '') {
+			$branch = '';
+		} else {
+			$branches = $this->listRemoteBranches($remote);
+			if (!empty($branches)) {
+				if ($branch === '' || !$this->isAllowedGitBranch($branch)) {
+					if (in_array('main', $branches, true)) {
+						$branch = 'main';
+					} elseif (in_array('master', $branches, true)) {
+						$branch = 'master';
+					} else {
+						$branch = $branches[0];
+					}
+				}
+				if (!in_array($branch, $branches, true)) {
+					$this->error = $langs->trans('DolibarrUpdaterGitBadBranch');
+					return -1;
+				}
+			} else {
+				$currentRemote = getDolGlobalString('DOLIBARRUPDATER_GIT_REMOTE');
+				$currentBranch = getDolGlobalString('DOLIBARRUPDATER_GIT_BRANCH');
+				if (!($remote === $currentRemote && $branch === $currentBranch && $this->isAllowedGitBranch($branch))) {
+					$this->error = $this->error !== '' ? $this->error : $langs->trans('DolibarrUpdaterGitBranchesEmpty');
+					return -1;
+				}
+			}
 		}
 
 		$result1 = dolibarr_set_const($db, 'DOLIBARRUPDATER_GIT_REMOTE', $remote, 'chaine', 0, '', $conf->entity);
@@ -1755,6 +1912,107 @@ class DolibarrUpdater
 			return -1;
 		}
 		return 1;
+	}
+
+	/**
+	 * @param string $content Descriptor PHP source
+	 * @return string
+	 */
+	private function parseModuleDescriptorVersion($content)
+	{
+		if (!is_string($content) || $content === '') {
+			return '';
+		}
+		if (!preg_match('/\$this->version\s*=\s*[\'"](\d+\.\d+\.\d+(?:-beta\d*)?)[\'"]/', $content, $m)) {
+			return '';
+		}
+		return $m[1];
+	}
+
+	/**
+	 * @param string $remote HTTPS remote
+	 * @param string $branch Branch
+	 * @return string Descriptor file contents or empty
+	 */
+	private function fetchRemoteDescriptorContent($remote, $branch)
+	{
+		$parts = parse_url($remote);
+		if (empty($parts['host']) || empty($parts['path'])) {
+			return '';
+		}
+		$host = strtolower((string) $parts['host']);
+		if ($host === 'github.com' && preg_match('#^/([^/]+)/([^/]+?)(?:\.git)?/?$#', (string) $parts['path'], $m)) {
+			$branchPath = implode('/', array_map('rawurlencode', explode('/', $branch)));
+			$url = 'https://raw.githubusercontent.com/'.$m[1].'/'.$m[2].'/'.$branchPath.'/core/modules/modDolibarrupdater.class.php';
+			$raw = $this->httpGet($url);
+			return ($raw === false) ? '' : $raw;
+		}
+
+		if (!$this->isModuleGitRepo()) {
+			return '';
+		}
+		$moduleReal = realpath($this->moduleDir());
+		if ($moduleReal === false) {
+			return '';
+		}
+
+		$remoteGet = $this->runGit(array('remote', 'get-url', 'origin'), $moduleReal);
+		if ($remoteGet['code'] !== 0) {
+			$add = $this->runGit(array('remote', 'add', 'origin', $remote), $moduleReal);
+			if ($add['code'] !== 0) {
+				return '';
+			}
+		} elseif (trim($remoteGet['out']) !== $remote) {
+			$set = $this->runGit(array('remote', 'set-url', 'origin', $remote), $moduleReal);
+			if ($set['code'] !== 0) {
+				return '';
+			}
+		}
+
+		$fetch = $this->runGit(array('fetch', '--depth', '1', 'origin', $branch), $moduleReal);
+		if ($fetch['code'] !== 0) {
+			return '';
+		}
+		$show = $this->runGit(array('show', 'FETCH_HEAD:core/modules/modDolibarrupdater.class.php'), $moduleReal);
+		if ($show['code'] !== 0) {
+			return '';
+		}
+		return $show['out'];
+	}
+
+	/**
+	 * @param array<int,string> $branches Branch names
+	 * @return array<int,string>
+	 */
+	private function sortBranchNames(array $branches)
+	{
+		usort($branches, function ($a, $b) {
+			$priority = array('main' => 0, 'master' => 1);
+			$pa = isset($priority[$a]) ? $priority[$a] : 100;
+			$pb = isset($priority[$b]) ? $priority[$b] : 100;
+			if ($pa !== $pb) {
+				return $pa - $pb;
+			}
+			return strcasecmp($a, $b);
+		});
+		return array_values($branches);
+	}
+
+	/**
+	 * Working directory for git commands that do not need a repository.
+	 *
+	 * @return string
+	 */
+	private function gitListCwd()
+	{
+		$module = $this->moduleDir();
+		if (is_dir($module)) {
+			return $module;
+		}
+		if ($this->ensureDir($this->workDir())) {
+			return $this->workDir();
+		}
+		return DOL_DATA_ROOT;
 	}
 
 	/**

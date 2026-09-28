@@ -314,6 +314,20 @@ print '<br>';
 print '<div class="div-table-responsive-no-min">';
 print '<table class="noborder centpercent">';
 print '<tr class="liste_titre"><th colspan="2">'.$langs->trans('DolibarrUpdaterGitTitle').'</th></tr>';
+print '<tr class="oddeven"><td>'.$langs->trans('DolibarrUpdaterModuleVersion').'</td><td>';
+print dol_escape_htmltag(!empty($gitStatus['version']) ? $gitStatus['version'] : '-');
+print '</td></tr>';
+print '<tr class="oddeven"><td>'.$langs->trans('DolibarrUpdaterModuleUpdateStatus').'</td><td>';
+if (!empty($gitStatus['update_available']) && !empty($gitStatus['remote_version'])) {
+	print '<span class="badge badge-status1">'.$langs->trans('DolibarrUpdaterModuleUpdateAvailable', dol_escape_htmltag($gitStatus['remote_version'])).'</span>';
+} elseif (!empty($gitStatus['remote_version']) && !empty($gitStatus['version'])) {
+	print '<span class="badge badge-status4">'.$langs->trans('DolibarrUpdaterModuleUpToDate').'</span>';
+} elseif ($gitStatus['remote'] === '') {
+	print '<span class="opacitymedium">'.$langs->trans('DolibarrUpdaterGitNotConfigured').'</span>';
+} else {
+	print '<span class="opacitymedium">'.$langs->trans('DolibarrUpdaterModuleVersionCheckFailed').'</span>';
+}
+print '</td></tr>';
 print '<tr class="oddeven"><td>'.$langs->trans('DolibarrUpdaterGitBinary').'</td><td>';
 print !empty($gitStatus['git'])
 	? '<span class="badge badge-status4">'.$langs->trans('DolibarrUpdaterCheckOk').'</span> '.dol_escape_htmltag($updater->gitBinary())
@@ -335,6 +349,9 @@ print '</td></tr>';
 print '<tr class="oddeven"><td>'.$langs->trans('Status').'</td><td>'.dol_escape_htmltag($gitStatus['message']).'</td></tr>';
 print '</table></div>';
 
+$branchOptions = !empty($gitStatus['branches']) && is_array($gitStatus['branches']) ? $gitStatus['branches'] : array();
+$branchSelectable = ($gitStatus['remote'] !== '' && !empty($branchOptions));
+
 print '<form method="POST" action="'.dol_escape_htmltag($_SERVER['PHP_SELF']).'">';
 print '<input type="hidden" name="token" value="'.newToken().'">';
 print '<input type="hidden" name="action" value="savegit">';
@@ -344,8 +361,25 @@ print '<div class="div-table-responsive-no-min">';
 print '<table class="noborder centpercent">';
 print '<tr class="oddeven"><td class="titlefield">'.$langs->trans('DolibarrUpdaterGitRemote').'</td>';
 print '<td><input class="flat minwidth400" type="url" name="git_remote" value="'.dol_escape_htmltag($gitStatus['remote']).'" placeholder="https://github.com/org/dolibarrupdater.git"></td></tr>';
-print '<tr class="oddeven"><td>'.$langs->trans('DolibarrUpdaterGitBranch').'</td>';
-print '<td><input class="flat minwidth200" type="text" name="git_branch" value="'.dol_escape_htmltag($gitStatus['branch']).'"></td></tr>';
+print '<tr class="oddeven"><td>'.$langs->trans('DolibarrUpdaterGitBranch').'</td><td>';
+if ($branchSelectable) {
+	print '<select class="flat minwidth200" name="git_branch">';
+	foreach ($branchOptions as $branchOpt) {
+		$selected = ($gitStatus['branch'] === $branchOpt) ? ' selected' : '';
+		print '<option value="'.dol_escape_htmltag($branchOpt).'"'.$selected.'>'.dol_escape_htmltag($branchOpt).'</option>';
+	}
+	print '</select>';
+} else {
+	print '<select class="flat minwidth200" name="git_branch" disabled>';
+	print '<option value="">'.$langs->trans('DolibarrUpdaterGitBranchUnavailable').'</option>';
+	print '</select>';
+	if ($gitStatus['remote'] === '') {
+		print ' <span class="opacitymedium">'.$langs->trans('DolibarrUpdaterGitBranchSaveRemoteFirst').'</span>';
+	} else {
+		print ' <span class="opacitymedium">'.$langs->trans('DolibarrUpdaterGitBranchesEmpty').'</span>';
+	}
+}
+print '</td></tr>';
 print '</table></div>';
 print '<div class="tabsAction">';
 print '<input type="submit" class="butAction" value="'.dol_escape_htmltag($langs->trans('Save')).'">';

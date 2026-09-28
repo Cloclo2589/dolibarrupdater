@@ -47,7 +47,7 @@ class modDolibarrupdater extends DolibarrModules
 		$this->descriptionlong = 'DolibarrUpdaterDescription';
 		$this->editor_name = 'IODE';
 		$this->editor_url = '';
-		$this->version = '1.1.0';
+		$this->version = '1.2.0';
 		$this->const_name = 'MAIN_MODULE_'.strtoupper($this->name);
 		$this->picto = 'fa-download';
 		$this->langfiles = array('dolibarrupdater@dolibarrupdater');
@@ -58,22 +58,6 @@ class modDolibarrupdater extends DolibarrModules
 
 		$this->rights = array();
 		$this->menu = array();
-		$r = 0;
-		$this->menu[$r++] = array(
-			'fk_menu' => 'fk_mainmenu=home,fk_leftmenu=setup',
-			'type' => 'left',
-			'titre' => 'DolibarrUpdaterMenu',
-			'prefix' => img_picto('', $this->picto, 'class="paddingright pictofixedwidth"'),
-			'mainmenu' => 'home',
-			'leftmenu' => 'dolibarrupdater',
-			'url' => '/dolibarrupdater/admin/update.php?mainmenu=home&leftmenu=setup',
-			'langs' => 'dolibarrupdater@dolibarrupdater',
-			'position' => 1000,
-			'enabled' => 'isModEnabled("dolibarrupdater")',
-			'perms' => '$user->admin',
-			'target' => '',
-			'user' => 0,
-		);
 
 		$langs->load('dolibarrupdater@dolibarrupdater');
 	}
