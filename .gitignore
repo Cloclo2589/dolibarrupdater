@@ -1,0 +1,19 @@
+# Dependencies / caches
+*.cache.json
+/vendor/
+/node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# Secrets / local env
+.env
+.env.*
+*.pem
+*.key
+credentials*
